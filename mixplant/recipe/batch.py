@@ -20,6 +20,7 @@ def batch_payload(plan: BatchPlan) -> dict[str, Any]:
         "unit": plan.unit,
         "materials": dict(plan.materials),
         "free_water_l": plan.free_water_l,
+        "moisture_per_material": dict(plan.moisture_per_material),
     }
 
 

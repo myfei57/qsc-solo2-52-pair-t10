@@ -19,12 +19,19 @@
   <form id="declare"><input name="batch_id" value="B-001"><input name="quantity" value="6"><button type="submit">declare</button></form>
   <form id="map"><input name="bin" value="bin-1"><input name="material" value="sand"><button type="submit">map bin</button></form>
   <form id="compensate"><input name="material" value="sand"><input name="moisture_percent" value="4.5"><input name="quantity" value="6"><button type="submit">compensate</button></form>
+  <form id="reading"><input name="material" value="gravel"><input name="moisture_percent" value="1.2"><input name="observed_tick" placeholder="observed tick (blank=now)"><button type="submit">file reading</button></form>
+  <form id="backfill"><input name="material" value="sand"><input name="moisture_percent" value="6.0"><input name="observed_tick" value="0"><button type="submit">backfill late reading</button></form>
+  <form id="policy"><input name="material" value="sand"><input name="policy" value="retroactive"><button type="submit">set retro policy</button></form>
   <form id="weigh"><input name="bin" value="bin-1"><input name="actual_kg" value="4800"><button type="submit">weigh</button></form>
   <form id="persist"><button type="submit">persist weight</button></form>
   <form id="check"><input name="actual_total_kg" value="12300"><button type="submit">dry check</button></form>
   <form id="release"><input name="residual_kg" value="3"><button type="submit">release hopper</button></form>
   <form id="drop"><button type="submit">drop</button></form>
   <p>targets <span class="flag" id="targets"></span></p>
+  <p>per aggregate moisture <span class="flag" id="per-material"></span></p>
+  <p>pending batching water adjustment <span class="flag" id="water-delta"></span> L</p>
+  <p>reconcile <span class="flag" id="reconcile"></span></p>
+  <table id="revisions"><thead><tr><th>batch</th><th>revision</th><th>free water L</th><th>status</th><th>basis readings</th></tr></thead><tbody></tbody></table>
   <table id="bins"><thead><tr><th>bin</th><th>material</th><th>target kg</th></tr></thead><tbody></tbody></table>
   <script id="plant-state" type="application/json"><!--STATE--></script>
   <script>
@@ -32,17 +39,27 @@
     const body = document.querySelector('#bins tbody');
     const targets = (state.targets && state.targets.targets) || {};
     document.getElementById('targets').textContent = JSON.stringify(targets);
+    document.getElementById('per-material').textContent = JSON.stringify((state.moisture || {}).per_material_percent || {});
+    document.getElementById('water-delta').textContent = String(state.takestock ? state.takestock.pending_water_delta_l : 0);
+    document.getElementById('reconcile').textContent = JSON.stringify(state.reconcile || {});
     for (const [bin, kg] of Object.entries(targets)) {
       const row = document.createElement('tr');
       row.innerHTML = `<td>${bin}</td><td>${(state.recipe.mapping?.assignments ?? {})[bin] ?? ''}</td><td>${kg}</td>`;
       body.appendChild(row);
     }
+    const revBody = document.querySelector('#revisions tbody');
+    for (const rev of ((state.revisions && state.revisions.revisions) || [])) {
+      const row = document.createElement('tr');
+      row.innerHTML = `<td>${rev.batch_id}</td><td>${rev.revision}</td><td>${rev.free_water_l}</td><td>${rev.superseded ? 'superseded by ' + rev.superseded_by : 'current'}</td><td>${(rev.reading_ids || []).join(', ')}</td>`;
+      revBody.appendChild(row);
+    }
     async function post(path, form) {
       const entries = form ? Object.fromEntries(new FormData(form).entries()) : {};
+      for (const key of Object.keys(entries)) if (entries[key] === '') delete entries[key];
       const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(entries) });
       return response.json();
     }
-    const routes = { declare: '/api/batch/declare', map: '/api/agg/map', compensate: '/api/moist/compensate', weigh: '/api/agg/weigh', persist: '/api/agg/persist', check: '/api/agg/check', release: '/api/agg/release', drop: '/api/agg/drop' };
+    const routes = { declare: '/api/batch/declare', map: '/api/agg/map', compensate: '/api/moist/compensate', reading: '/api/moist/reading', backfill: '/api/moist/backfill', policy: '/api/moist/policy', weigh: '/api/agg/weigh', persist: '/api/agg/persist', check: '/api/agg/check', release: '/api/agg/release', drop: '/api/agg/drop' };
     for (const [id, path] of Object.entries(routes)) {
       document.getElementById(id).addEventListener('submit', async (event) => { event.preventDefault(); console.log(await post(path, event.target)); location.reload(); });
     }

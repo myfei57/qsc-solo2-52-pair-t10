@@ -46,11 +46,18 @@ class AggService(PlantService):
         context: SharedContext,
         recipes: RecipeService,
         machine: SequenceMachine | None = None,
+        moist: Any = None,
     ) -> None:
         super().__init__(context, machine)
         self.recipes = recipes
+        self.moist = moist
         self._calibration = calibrate(slope=1.0, offset=0.0)
         self._reports: list[dict[str, Any]] = []
+
+    def bind_moist(self, moist: Any) -> None:
+        """Wire the moisture service once the runtime has built both sides."""
+
+        self.moist = moist
 
     def declare_batch(self, *, batch_id: str, quantity: float) -> dict[str, Any]:
         """Declare the batch that the selected recipe is batched into."""
@@ -66,6 +73,7 @@ class AggService(PlantService):
             quantity=quantity,
             moisture_percent=recipe.moisture_ref_percent,
             wet_materials=WET_MATERIALS,
+            moisture_per_material=self._moisture_percentages(self.context.clock.now()),
         )
         batch = self.context.batches.declare(
             batch_id,
@@ -227,20 +235,28 @@ class AggService(PlantService):
         batch = self.context.batches.latest()
         if batch is None:
             raise NotFoundError("declare a batch before planning the aggregates")
+        # A retroactive migration keeps a current revision; weigh against it.
+        if self.moist is not None:
+            current = self.moist.current_plan(batch.batch_id)
+            if current is not None:
+                return current.plan
         recipe = self.recipes.current()
-        entry = self.payload_entry("moist", "comp")
-        moisture = (
-            float(entry.get("percent", recipe.moisture_ref_percent))
-            if isinstance(entry, dict)
-            else recipe.moisture_ref_percent
-        )
+        percentages = self._moisture_percentages(batch.tick)
         return plan_batch(
             recipe,
             batch_id=batch.batch_id,
             quantity=batch.quantity,
-            moisture_percent=moisture,
+            moisture_percent=percentages.get(WET_MATERIALS[0], recipe.moisture_ref_percent),
             wet_materials=WET_MATERIALS,
+            moisture_per_material=percentages,
         )
+
+    def _moisture_percentages(self, batch_tick: int) -> dict[str, float] | None:
+        """Return each wet aggregate's own percentage when readings exist."""
+
+        if self.moist is None:
+            return None
+        return self.moist.percentages_for(batch_tick=batch_tick)
 
     def _target_for(self, bin_name: str) -> float:
         targets = self._targets()["targets"]

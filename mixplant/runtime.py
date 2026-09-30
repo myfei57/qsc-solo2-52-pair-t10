@@ -48,9 +48,16 @@ CLOCK_KIND = "store.clock"
 BASELINE_KIND = "version.baseline"
 CONFIRMATION_KIND = "version.confirmation"
 BATCH_KIND = "agg.batch"
+DROP_KIND = "agg.drop"
 TIMER_KIND = "mix.timer"
 LATCH_KIND = "sampler.latch"
 COMP_KIND = "moist.comp"
+MODE_KIND = "moist.mode"
+READING_KIND = "moist.reading"
+POLICY_KIND = "moist.policy"
+REVISION_KIND = "moist.revision"
+ADJUST_KIND = "moist.adjust"
+SUPERSEDE_KIND = "moist.supersede"
 SELECTED_KIND = "recipe.selected"
 PUBLISHED_KIND = "recipe.published"
 
@@ -103,6 +110,7 @@ class PlantRuntime:
         self.recipes = RecipeService(self.context, self.topology, self.machines["batch"])
         self.agg = AggService(self.context, self.recipes, self.machines["batch"])
         self.moist = MoistService(self.context, self.recipes.book, default_table(), self.machines["batch"])
+        self.agg.bind_moist(self.moist)
         self.cement = CementService(self.context, self.machines["mix"])
         self.water = WaterService(self.context, self.machines["mix"])
         self.mix = MixService(self.context, self.recipes, self.machines["mix"])
@@ -136,6 +144,7 @@ class PlantRuntime:
         self.bus.subscribe(ALARM, self.alarms)
         self.bus.subscribe(ALARM, self.audit.handle_alarm)
         self.bus.subscribe_all(self.audit_subscriber)
+        self.bus.subscribe("agg", self.moist.handle_batch_event)
 
     def bootstrap(self) -> dict[str, Any]:
         """Rebuild every derived artifact from the stored stream."""
@@ -145,6 +154,7 @@ class PlantRuntime:
         self.boot_report = report
         self._restore_id_counters()
         self._adopt_records()
+        self._restore_moisture()
         self._hydrate_machines()
         self.store.publish(
             BOOT_KIND,
@@ -175,6 +185,10 @@ class PlantRuntime:
         self.ids.restore("snap", len(self.store.snapshots.load_all()))
         samples = sum(1 for record in self.store.visible() if record.kind == "sampler.record")
         self.ids.restore("sample", samples)
+        self.ids.restore(
+            "reading",
+            sum(1 for record in self.store.visible() if record.kind == READING_KIND),
+        )
 
     def _adopt_records(self) -> None:
         """Adopt everything the stream still carries."""
@@ -229,6 +243,25 @@ class PlantRuntime:
                     validity=Validity.never(record.tick),
                 )
         self.moist.sync(corrections)
+
+    def _restore_moisture(self) -> None:
+        """Replay readings, batches, revisions and water adjustments in order."""
+
+        for record in self.store.visible():
+            if record.kind == READING_KIND:
+                self.moist.restore_reading(record)
+            elif record.kind == POLICY_KIND:
+                self.moist.restore_policy(record)
+            elif record.kind == BATCH_KIND:
+                self.moist.restore_batch(record)
+            elif record.kind == DROP_KIND:
+                self.moist.restore_drop(record)
+            elif record.kind == REVISION_KIND:
+                self.moist.restore_revision(record)
+            elif record.kind == SUPERSEDE_KIND:
+                self.moist.restore_supersede(record)
+            elif record.kind == ADJUST_KIND:
+                self.moist.restore_adjustment(record)
 
     def _hydrate_machines(self) -> None:
         for line, machine in self.machines.items():
@@ -413,6 +446,25 @@ class PlantRuntime:
                 moisture_percent=number(payload, "moisture_percent"),
                 quantity=number(payload, "quantity"),
             ),
+            "moist.reading": lambda payload: self.moist.file_reading(
+                material=text(payload, "material"),
+                moisture_percent=number(payload, "moisture_percent"),
+                observed_tick=optional_integer(payload, "observed_tick", self.clock.now()),
+                reading_id=optional_text(payload, "reading_id", None) or None,
+            ),
+            "moist.backfill": lambda payload: self.moist.backfill_reading(
+                material=text(payload, "material"),
+                moisture_percent=number(payload, "moisture_percent"),
+                observed_tick=integer(payload, "observed_tick"),
+                reading_id=optional_text(payload, "reading_id", None) or None,
+            ),
+            "moist.policy": lambda payload: self.moist.set_policy(
+                material=text(payload, "material"),
+                policy=text(payload, "policy"),
+            ),
+            "moist.takestock": lambda _: self.moist.takestock(),
+            "moist.revisions": lambda payload: self.moist.revisions(text(payload, "batch_id")),
+            "moist.reconcile": lambda _: self.moist.reconcile(),
             "cement.load_silo": lambda payload: self.cement.load_silo(
                 silo=text(payload, "silo"),
                 material=optional_text(payload, "material", "cement"),

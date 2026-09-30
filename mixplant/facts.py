@@ -69,5 +69,5 @@ def derive_facts(state: Mapping[str, Any]) -> dict[str, bool]:
         TRUCK_LOADED: flag(state, "chute.load"),
         PUMP_RUNNING: flag(state, "pump.run"),
         SAMPLER_LATCHED: _latch(state, "sampler"),
-        MOIST_COMPENSATED: flag(state, "moist.comp"),
+        MOIST_COMPENSATED: flag(state, "moist.comp") or flag(state, "moist.reading"),
     }

@@ -17,6 +17,9 @@ COMMANDS = (
     ("POST", "/api/agg/drop", "agg.drop"),
     ("POST", "/api/agg/calibrate", "agg.calibrate"),
     ("POST", "/api/moist/compensate", "moist.compensate"),
+    ("POST", "/api/moist/reading", "moist.reading"),
+    ("POST", "/api/moist/backfill", "moist.backfill"),
+    ("POST", "/api/moist/policy", "moist.policy"),
 )
 
 
@@ -29,6 +32,21 @@ def register(router: Router, runtime: Any, pages: Any) -> None:
         lambda _: Response.html(inject_snapshot(pages.load("batch"), runtime.controller.batch_view())),
     )
     router.add("GET", "/api/batch", lambda _: Response.json(runtime.controller.batch_view()))
+    router.add(
+        "GET",
+        "/api/moist/takestock",
+        lambda _: Response.json(runtime.moist.takestock()),
+    )
+    router.add(
+        "GET",
+        "/api/moist/reconcile",
+        lambda _: Response.json(runtime.moist.reconcile()),
+    )
+    router.add(
+        "GET",
+        "/api/moist/revisions/{batch_id}",
+        lambda request: Response.json(runtime.moist.revisions(request.params["batch_id"])),
+    )
     for method, path, command in COMMANDS:
         router.add(method, path, _command(runtime, command))
 

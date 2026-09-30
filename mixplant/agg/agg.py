@@ -13,4 +13,7 @@ HOPPER_KIND = "agg.hopper"
 CALIBRATE_KIND = "agg.calibrate"
 REPORT_KIND = "agg.report"
 
-WET_MATERIALS: tuple[str, ...] = ("sand",)
+# The wet aggregates that carry free water and need their own compensation.
+# Each one is corrected with its own moisture percentage; the moisture
+# subsystem decides whether a late reading rewrites earlier batches.
+WET_MATERIALS: tuple[str, ...] = ("sand", "gravel")
