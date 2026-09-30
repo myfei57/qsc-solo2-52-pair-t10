@@ -60,12 +60,14 @@ class AggService(PlantService):
         if self.machine.is_at(BatchPhase.IDLE.value):
             self.advance(BatchPhase.RECIPE_SELECTED.value, "batch declared against the selected recipe")
         recipe = self.recipes.current()
+        moisture_map = self.context.moist.moisture_map_for(quantity) if self._moist_tracks_recipe(recipe) else None
         plan = plan_batch(
             recipe,
             batch_id=batch_id,
             quantity=quantity,
             moisture_percent=recipe.moisture_ref_percent,
             wet_materials=WET_MATERIALS,
+            moisture_per_material=moisture_map,
         )
         batch = self.context.batches.declare(
             batch_id,
@@ -75,8 +77,15 @@ class AggService(PlantService):
             quantity=quantity,
         )
         self.publish(BATCH_KIND, batch_payload(plan))
+        if moisture_map is not None:
+            self.context.moist.register_batch_plan(batch_id, quantity, plan)
         self.emit("agg.batch_declared", {**batch.describe(), "targets": plan.describe()["materials"]})
         return {"batch": batch.describe(), "batches": self.context.batches.count()}
+
+    def _moist_tracks_recipe(self, recipe: Any) -> bool:
+        """Only register moisture rows for wet aggregates the recipe uses."""
+
+        return any(material in recipe.factors for material in WET_MATERIALS)
 
     def map_bin(self, bin_name: str, material: str) -> dict[str, Any]:
         """Refresh the bin assignment for the selected recipe version."""
@@ -228,6 +237,21 @@ class AggService(PlantService):
         if batch is None:
             raise NotFoundError("declare a batch before planning the aggregates")
         recipe = self.recipes.current()
+        # A migrated batch plans against its newest revision, so a late
+        # reading traced back changes the weigh target of the still-open batch.
+        moist = getattr(self.context, "moist", None)
+        if moist is not None and moist.revisions.has(batch.batch_id):
+            history = moist.revisions.for_batch(batch.batch_id)
+            latest = history.latest
+            plan = plan_batch(
+                recipe,
+                batch_id=batch.batch_id,
+                quantity=batch.quantity,
+                moisture_percent=latest.plan.moisture_percent,
+                wet_materials=tuple(latest.plan.moisture_per_material) or WET_MATERIALS,
+                moisture_per_material=dict(latest.plan.moisture_per_material),
+            )
+            return plan
         entry = self.payload_entry("moist", "comp")
         moisture = (
             float(entry.get("percent", recipe.moisture_ref_percent))

@@ -30,3 +30,4 @@ class SharedContext:
     batches: BatchRegistry
     gate: PreGate
     ids: SequenceIds
+    moist: "MoistService | None" = None

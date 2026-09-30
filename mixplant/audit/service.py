@@ -47,6 +47,13 @@ class AuditService(PlantService):
             audit_entry(name=event.name, origin=event.origin, tick=event.tick, detail=dict(event.payload))
         )
 
+    def handle_moist(self, event: Event) -> None:
+        """File a moisture migration/non migration/reconcile in the ledger."""
+
+        self.ledger.record(
+            audit_entry(name=event.name, origin=event.origin, tick=event.tick, detail=dict(event.payload))
+        )
+
     def rollup(self) -> dict[str, Any]:
         """Write and return the current production roll-up."""
 

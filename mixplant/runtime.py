@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace as dataclass_replace
 from typing import Any, Callable, Mapping
 
 from .agg.service import AggService
@@ -18,11 +19,19 @@ from .decision.thresholds import ThresholdSet
 from .errors import NotFoundError
 from .event.bus import Event, EventBus
 from .event.subscribers import AlarmCollector, AuditSubscriber
-from .event.topics import ALARM, STORE
+from .event.topics import ALARM, MOIST, STORE
 from .ids import SequenceIds
 from .interlocks import build_engine
 from .mix.service import MixService
 from .moist.comp import Compensation
+from .moist.readings import (
+    MIGRATION_KIND,
+    NONMIGRATION_KIND,
+    PILE_KIND,
+    POLICY_KIND,
+    READING_KIND,
+)
+from .moist.service import BATCH_ROW_KIND as MOIST_BATCH_ROW_KIND
 from .moist.service import MoistService
 from .moist.table import default_table
 from .ns.registry import DeviceKind
@@ -51,6 +60,8 @@ BATCH_KIND = "agg.batch"
 TIMER_KIND = "mix.timer"
 LATCH_KIND = "sampler.latch"
 COMP_KIND = "moist.comp"
+MOIST_REVISION_KIND = "moist.revision"
+MOIST_FROZEN_KIND = "moist.frozen"
 SELECTED_KIND = "recipe.selected"
 PUBLISHED_KIND = "recipe.published"
 
@@ -101,8 +112,13 @@ class PlantRuntime:
             ids=self.ids,
         )
         self.recipes = RecipeService(self.context, self.topology, self.machines["batch"])
-        self.agg = AggService(self.context, self.recipes, self.machines["batch"])
         self.moist = MoistService(self.context, self.recipes.book, default_table(), self.machines["batch"])
+        # The aggregate service plans through the moisture service, so hand
+        # the frozen context back with the moist collaborator attached.
+        self.context = dataclass_replace(self.context, moist=self.moist)
+        self.moist.context = self.context
+        self.recipes.context = self.context
+        self.agg = AggService(self.context, self.recipes, self.machines["batch"])
         self.cement = CementService(self.context, self.machines["mix"])
         self.water = WaterService(self.context, self.machines["mix"])
         self.mix = MixService(self.context, self.recipes, self.machines["mix"])
@@ -135,6 +151,7 @@ class PlantRuntime:
     def _wire_bus(self) -> None:
         self.bus.subscribe(ALARM, self.alarms)
         self.bus.subscribe(ALARM, self.audit.handle_alarm)
+        self.bus.subscribe(MOIST, self.audit.handle_moist)
         self.bus.subscribe_all(self.audit_subscriber)
 
     def bootstrap(self) -> dict[str, Any]:
@@ -209,6 +226,20 @@ class PlantRuntime:
                         wet_mass=float(record.payload.get("wet_mass", 0.0)),
                     )
                 )
+            elif record.kind == POLICY_KIND:
+                self.moist.adopt_policy(record.payload)
+            elif record.kind == PILE_KIND:
+                self.moist.adopt_pile(record.payload)
+            elif record.kind == READING_KIND:
+                self.moist.adopt_reading(record.payload)
+            elif record.kind == MOIST_BATCH_ROW_KIND:
+                self.moist.adopt_batch_row(record.payload)
+            elif record.kind == MIGRATION_KIND:
+                self.moist.adopt_migration(record.payload)
+            elif record.kind == NONMIGRATION_KIND:
+                self.moist.adopt_nonmigration(record.payload)
+            elif record.kind == MOIST_REVISION_KIND:
+                self._adopt_revision(record)
             elif record.kind == TIMER_KIND:
                 self.mix.timer.sync(
                     started=record.payload.get("started"),
@@ -229,6 +260,48 @@ class PlantRuntime:
                     validity=Validity.never(record.tick),
                 )
         self.moist.sync(corrections)
+
+    def _adopt_revision(self, record: Any) -> None:
+        """Rebuild a batch plan revision from its stored moisture map."""
+
+        from .recipe.plan import plan_batch
+
+        payload = record.payload
+        batch_id = str(payload["batch_id"])
+        revision_no = int(payload["revision"])
+        if self.moist.revisions.has(batch_id):
+            history = self.moist.revisions.for_batch(batch_id)
+            if any(item.revision == revision_no for item in history.revisions()):
+                return
+        batch = self.batches.find(batch_id)
+        if batch is None or self.recipes.book.selected_name() is None:
+            return
+        recipe = self.recipes.current()
+        moisture_map = {
+            str(material): float(percent)
+            for material, percent in dict(payload.get("moisture_per_material", {})).items()
+        }
+        plan = plan_batch(
+            recipe,
+            batch_id=batch_id,
+            quantity=batch.quantity,
+            moisture_percent=0.0,
+            wet_materials=tuple(moisture_map) or ("sand",),
+            moisture_per_material=moisture_map,
+        )
+        from .moist.revisions import PlanRevision
+
+        history = self.moist.revisions.for_batch(batch_id)
+        history.adopt(
+            PlanRevision(
+                revision=revision_no,
+                plan=plan,
+                basis=str(payload.get("basis", "migrated")),
+                source_reading_ids=tuple(str(item) for item in payload.get("source_reading_ids", ())),
+                water_delta_l=float(payload.get("water_delta_l", 0.0)),
+                tick=record.tick,
+            )
+        )
 
     def _hydrate_machines(self) -> None:
         for line, machine in self.machines.items():
@@ -413,6 +486,24 @@ class PlantRuntime:
                 moisture_percent=number(payload, "moisture_percent"),
                 quantity=number(payload, "quantity"),
             ),
+            "moist.reading": lambda payload: self.moist.reading(
+                material=text(payload, "material"),
+                moisture_percent=number(payload, "moisture_percent"),
+                observed_tick=self._optional_int(payload, "observed_tick"),
+                pile_id=optional_text(payload, "pile_id", None) or None,
+                reading_id=optional_text(payload, "reading_id", None) or None,
+            ),
+            "moist.change_pile": lambda payload: self.moist.change_pile(
+                text(payload, "material"), text(payload, "pile_id")
+            ),
+            "moist.set_policy": lambda payload: self.moist.set_late_policy(
+                text(payload, "material"), text(payload, "policy")
+            ),
+            "moist.reconcile": lambda payload: self.moist.reconcile(),
+            "moist.stocktake": lambda payload: self.moist.stocktake(),
+            "moist.migrations": lambda payload: self.moist.migration_report(
+                optional_text(payload, "batch_id", None) or None
+            ),
             "cement.load_silo": lambda payload: self.cement.load_silo(
                 silo=text(payload, "silo"),
                 material=optional_text(payload, "material", "cement"),
@@ -528,3 +619,15 @@ class PlantRuntime:
     def _detail(payload: Mapping[str, Any]) -> dict[str, Any]:
         raw = payload.get("detail")
         return dict(raw) if isinstance(raw, Mapping) else {}
+
+    @staticmethod
+    def _optional_int(payload: Mapping[str, Any], key: str) -> int | None:
+        value = payload.get(key)
+        if value is None or value == "":
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError) as exc:
+            from .errors import ValidationError
+
+            raise ValidationError("command field must be an integer", field=key, value=str(value)) from exc

@@ -45,6 +45,29 @@ class ValidityDefaults:
 
 
 @dataclass(frozen=True, slots=True)
+class MoistureConfig:
+    """Per aggregate late reading policy.
+
+    ``retroactive`` aggregates have a late reading traced back onto the open
+    batches drawn from the pile it was taken on.  ``forward_only`` aggregates
+    only update later batches and log why the earlier ones were left alone.
+    """
+
+    late_policy: Mapping[str, str] = field(
+        default_factory=lambda: {
+            "sand": "retroactive",
+            "gravel": "retroactive",
+            "manufactured-sand": "retroactive",
+            "cement": "forward_only",
+            "fly-ash": "forward_only",
+        }
+    )
+
+    def describe(self) -> Mapping[str, Any]:
+        return {"late_policy": dict(self.late_policy)}
+
+
+@dataclass(frozen=True, slots=True)
 class StationConfig:
     """Everything the runtime needs in order to boot."""
 
@@ -55,6 +78,7 @@ class StationConfig:
     web_dir: Path = Path("web")
     limits: Limits = field(default_factory=Limits)
     defaults: ValidityDefaults = field(default_factory=ValidityDefaults)
+    moisture: MoistureConfig = field(default_factory=MoistureConfig)
 
     @classmethod
     def from_mapping(cls, document: Mapping[str, Any]) -> "StationConfig":
@@ -62,6 +86,8 @@ class StationConfig:
 
         limits = Limits(**dict(document.get("limits") or {}))
         defaults = ValidityDefaults(**dict(document.get("defaults") or {}))
+        moisture_document = document.get("moisture") or {}
+        moisture = MoistureConfig(late_policy=dict(moisture_document.get("late_policy") or {}))
         return cls(
             station=str(document.get("station", "plant-a")),
             host=str(document.get("host", "127.0.0.1")),
@@ -70,6 +96,7 @@ class StationConfig:
             web_dir=Path(str(document.get("web_dir", "web"))),
             limits=limits,
             defaults=defaults,
+            moisture=moisture,
         )
 
     @classmethod

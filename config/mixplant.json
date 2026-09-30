@@ -19,5 +19,14 @@
     "baseline_ttl_ticks": 32,
     "confirmation_ttl_ticks": 10,
     "snapshot_ttl_ticks": 64
+  },
+  "moisture": {
+    "late_policy": {
+      "sand": "retroactive",
+      "gravel": "retroactive",
+      "manufactured-sand": "retroactive",
+      "cement": "forward_only",
+      "fly-ash": "forward_only"
+    }
   }
 }

@@ -50,6 +50,12 @@ class WaterService(PlantService):
         if not reading.ok:
             self.raise_alarm("water.flow_over_limit", reading.describe())
         self.emit("water.dispensed", {"litres": reading.litres})
+        # Once batching water is metered for the current batch it cannot be
+        # un-dosed; close the batch to retroactive moisture migration.
+        moist = getattr(self.context, "moist", None)
+        batch = self.context.batches.latest()
+        if moist is not None and batch is not None:
+            moist.freeze_batch_water(batch.batch_id)
         if self.machine.is_at(MixPhase.IDLE.value):
             self.advance(MixPhase.WATER_IN.value, "water reached the mixer before the binder")
         return {"dispense": reading.describe(), "tank_l": self._level_l}

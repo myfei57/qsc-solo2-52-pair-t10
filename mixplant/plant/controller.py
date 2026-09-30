@@ -52,6 +52,23 @@ class PlantController:
             "counts": self.runtime.audit.counts(),
         }
 
+    def moist_view(self) -> dict[str, Any]:
+        """The document the moisture console page renders (read only)."""
+
+        moist = self.runtime.moist
+        from ..moist.reconcile import reconcile
+
+        return {
+            "status": moist.status(),
+            "policies": moist.ledger.policies(),
+            "piles": [pile.describe() for pile in moist.ledger.piles()],
+            "readings": [item.describe() for item in moist.ledger.readings()],
+            "migrations": [item.describe() for item in moist.ledger.migrations()],
+            "nonmigrations": [item.describe() for item in moist.ledger.nonmigrations()],
+            "stocktake": moist.stocktake(),
+            "reconcile": reconcile(moist.ledger, moist.revisions).describe(),
+        }
+
     def manifest(self) -> dict[str, Any]:
         return describe_manifest(
             station=self.runtime.config.station,

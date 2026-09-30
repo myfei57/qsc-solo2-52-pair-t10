@@ -52,6 +52,9 @@ def _latch(state: Mapping[str, Any], group: str) -> bool:
 def derive_facts(state: Mapping[str, Any]) -> dict[str, bool]:
     """Translate derived state into the boolean facts gates evaluate."""
 
+    # Moisture is considered compensated when either a legacy compensation
+    # exists or a per aggregate probe reading has been settled onto a pile.
+    moist_compensated = flag(state, "moist.comp") or flag(state, "moist.settle", key="applied")
     return {
         RECIPE_PUBLISHED: flag(state, "recipe.published"),
         RECIPE_SELECTED: flag(state, "recipe.selected"),
@@ -69,5 +72,5 @@ def derive_facts(state: Mapping[str, Any]) -> dict[str, bool]:
         TRUCK_LOADED: flag(state, "chute.load"),
         PUMP_RUNNING: flag(state, "pump.run"),
         SAMPLER_LATCHED: _latch(state, "sampler"),
-        MOIST_COMPENSATED: flag(state, "moist.comp"),
+        MOIST_COMPENSATED: moist_compensated,
     }

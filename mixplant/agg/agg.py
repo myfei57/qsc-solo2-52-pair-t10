@@ -13,4 +13,6 @@ HOPPER_KIND = "agg.hopper"
 CALIBRATE_KIND = "agg.calibrate"
 REPORT_KIND = "agg.report"
 
-WET_MATERIALS: tuple[str, ...] = ("sand",)
+#: Aggregates that carry free water and are compensated per pile probe.
+#: Sand, crushed stone and manufactured sand each keep their own moisture.
+WET_MATERIALS: tuple[str, ...] = ("sand", "gravel", "manufactured-sand")
